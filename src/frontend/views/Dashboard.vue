@@ -187,6 +187,7 @@
               <th>{{ trans.disk }}</th>
               <th>{{ trans.use }}</th>
               <th class="table-col-conn">TCP/UDP</th>
+              <th>{{ trans.latencyMonitor }}</th>
               <th width="95">{{ trans.dl }}</th>
               <th width="95">{{ trans.ul }}</th>
               <th width="70">{{ trans.update }}</th>
@@ -194,13 +195,13 @@
           </thead>
           <tbody>
             <tr v-if="isLoading">
-              <td class="table-empty-state" colspan="12">
+              <td class="table-empty-state" colspan="13">
                 <div class="loading-spinner-small"></div>
                 <span>$ {{ trans.loading }}</span>
               </td>
             </tr>
             <tr v-else-if="filteredServers.length === 0">
-              <td class="table-empty-state" colspan="12">[*] {{ trans.noData }}</td>
+              <td class="table-empty-state" colspan="13">[*] {{ trans.noData }}</td>
             </tr>
             <tr 
               v-for="server in filteredServers" 
@@ -263,6 +264,15 @@
               <td v-else>-</td>
               <td class="table-conn-cell">
                 <span class="conn-pair">{{ formatConnPair(server) }}</span>
+              </td>
+              <td class="table-ping-cell">
+                <div v-if="getCustomPingItems(server, sysConfig).length" class="table-pings">
+                  <span v-for="item in getCustomPingItems(server, sysConfig)" :key="item.key" class="table-ping-item">
+                    <span class="table-ping-name">{{ item.label }}</span>
+                    <strong :style="{ color: getTablePingColor(item.value) }">{{ formatTablePing(item.value) }}</strong>
+                  </span>
+                </div>
+                <span v-else>-</span>
               </td>
               <td>{{ formatBytes(server.net_in_speed) }}/s</td>
               <td>{{ formatBytes(server.net_out_speed) }}/s</td>
@@ -373,10 +383,10 @@ import Footer from '../components/Footer.vue'
 import OsIcon from '../components/OsIcon.vue'
 import LiveConnectionTimeoutModal from '../components/LiveConnectionTimeoutModal.vue'
 import { fetchConfig, fetchServersAll, fetchServersAllWithProgress, formatBytes, createLiveSocket, getFlagRegionCode, getApiBases, isServerOnline, normalizeLiveSocketTimeoutMinutes } from '../utils/api.js'
-import { calcTrafficUsagePercent, getUsageColor } from '../composables/useServerCardData'
+import { calcTrafficUsagePercent, getCustomPingItems, getUsageColor } from '../composables/useServerCardData'
 import { getTitle, hasMultipleApiBases, getPublicAssetUrl } from '../utils/config'
 import { currentLang, useTranslation } from '../utils/i18n.js'
-import { TIME, DEFAULT_SITE_TITLE, STORAGE, LATENCY_WINDOW } from '../utils/constants'
+import { TIME, DEFAULT_SITE_TITLE, STORAGE, LATENCY_WINDOW, PING } from '../utils/constants'
 import { normalizeTimestamp as normalizeMetricTimestamp } from '../utils/time.js'
 import { normalizeDashboardView, normalizeDisplayMode, resolveDisplayMode } from '../utils/displayMode.js'
 import { getPlaybackElapsedMs, resolvePlaybackCursor } from '../utils/playback.js'
@@ -688,6 +698,17 @@ const formatConnCount = (value) => {
 }
 
 const formatConnPair = (server) => `${formatConnCount(server.tcp_conn)} / ${formatConnCount(server.udp_conn)}`
+
+const isTablePingValid = value => value !== null && value !== undefined && value !== '' && Number.parseInt(value, 10) > 0
+const formatTablePing = value => isTablePingValid(value) ? `${Math.round(Number(value))}ms` : trans.value.timeout
+const getTablePingColor = value => {
+  if (!isTablePingValid(value)) return 'var(--accent-red)'
+  const latency = Number.parseInt(value, 10)
+  if (latency < PING.GOOD_THRESHOLD) return 'var(--accent-green)'
+  if (latency < PING.WARNING_THRESHOLD) return 'var(--accent-blue)'
+  if (latency < PING.CRITICAL_THRESHOLD) return 'var(--accent-yellow)'
+  return 'var(--accent-red)'
+}
 
 const formatSystemOs = (value) => {
   const raw = String(value || '').trim()

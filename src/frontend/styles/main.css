@@ -1875,6 +1875,28 @@ body::before {
     white-space: nowrap;
 }
 
+.table-ping-cell {
+    min-width: 240px;
+}
+
+.table-pings {
+    display: grid;
+    grid-template-columns: repeat(2, max-content);
+    gap: 4px 12px;
+}
+
+.table-ping-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.table-ping-name {
+    color: var(--text-secondary);
+}
+
 .table-system-info {
     display: inline-flex;
     align-items: center;

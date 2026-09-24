@@ -32,6 +32,17 @@ const CUSTOM_NODE_DEFS = [1, 2, 3, 4].map(index => ({
   fallbackLabel: `Node ${index}`
 }))
 
+export const getCustomPingItems = (server, sysConfig = {}) => CUSTOM_NODE_DEFS.flatMap(def => {
+  const value = server[def.pingField]
+  if (value === false || value === 'false') return []
+  if (!String(server[def.configField] || '').trim() && value == null) return []
+  return [{
+    key: def.key,
+    label: String(server[def.nameField] || sysConfig[def.nameField] || def.fallbackLabel),
+    value
+  }]
+})
+
 const DEFAULT_THREE_NET_POINT_COUNT = LATENCY_WINDOW.POINTS
 
 const normalizeLatencyTimestamp = (value, fallback = 0) => {
@@ -383,7 +394,7 @@ export function useServerCardData(props) {
     ...CUSTOM_NODE_DEFS.filter(def => {
       const ping = props.server[def.pingField]
       return String(props.server[def.configField] || '').trim()
-        || (ping !== undefined && !isPingDisabled(ping))
+        || (ping != null && !isPingDisabled(ping))
     })
   ]
     .map(def => {

@@ -187,6 +187,7 @@
               <th>{{ trans.disk }}</th>
               <th>{{ trans.use }}</th>
               <th class="table-col-conn">TCP/UDP</th>
+              <th>{{ trans.latencyMonitor }}</th>
               <th width="95">{{ trans.dl }}</th>
               <th width="95">{{ trans.ul }}</th>
               <th width="70">{{ trans.update }}</th>
@@ -194,13 +195,13 @@
           </thead>
           <tbody>
             <tr v-if="isLoading">
-              <td class="table-empty-state" colspan="12">
+              <td class="table-empty-state" colspan="13">
                 <div class="loading-spinner-small"></div>
                 <span>$ {{ trans.loading }}</span>
               </td>
             </tr>
             <tr v-else-if="filteredServers.length === 0">
-              <td class="table-empty-state" colspan="12">[*] {{ trans.noData }}</td>
+              <td class="table-empty-state" colspan="13">[*] {{ trans.noData }}</td>
             </tr>
             <tr 
               v-for="server in filteredServers" 
@@ -263,6 +264,15 @@
               <td v-else>-</td>
               <td class="table-conn-cell">
                 <span class="conn-pair">{{ formatConnPair(server) }}</span>
+              </td>
+              <td class="table-ping-cell">
+                <div v-if="getCustomPingItems(server, sysConfig).length" class="table-pings">
+                  <span v-for="item in getCustomPingItems(server, sysConfig)" :key="item.key" class="table-ping-item">
+                    <span class="table-ping-name">{{ item.label }}</span>
+                    <strong :style="{ color: getTablePingColor(item.value) }">{{ formatTablePing(item.value) }}</strong>
+                  </span>
+                </div>
+                <span v-else>-</span>
               </td>
               <td>{{ formatBytes(server.net_in_speed) }}/s</td>
               <td>{{ formatBytes(server.net_out_speed) }}/s</td>
@@ -373,10 +383,10 @@ import Footer from '../components/Footer.vue'
 import OsIcon from '../components/OsIcon.vue'
 import LiveConnectionTimeoutModal from '../components/LiveConnectionTimeoutModal.vue'
 import { fetchConfig, fetchServersAll, fetchServersAllWithProgress, formatBytes, createLiveSocket, getFlagRegionCode, getApiBases, isServerOnline, normalizeLiveSocketTimeoutMinutes } from '../utils/api.js'
-import { calcTrafficUsagePercent, getUsageColor } from '../composables/useServerCardData'
+import { calcTrafficUsagePercent, getCustomPingItems, getUsageColor } from '../composables/useServerCardData'
 import { getTitle, hasMultipleApiBases, getPublicAssetUrl } from '../utils/config'
 import { currentLang, useTranslation } from '../utils/i18n.js'
-import { TIME, DEFAULT_SITE_TITLE, STORAGE, LATENCY_WINDOW } from '../utils/constants'
+import { TIME, DEFAULT_SITE_TITLE, STORAGE, LATENCY_WINDOW, PING } from '../utils/constants'
 import { normalizeTimestamp as normalizeMetricTimestamp } from '../utils/time.js'
 import { normalizeDashboardView, normalizeDisplayMode, resolveDisplayMode } from '../utils/displayMode.js'
 import { getPlaybackElapsedMs, resolvePlaybackCursor } from '../utils/playback.js'
@@ -407,6 +417,10 @@ const sysConfig = ref({
   custom_cu_name: appConfig?.custom_cu_name || '联通',
   custom_cm_name: appConfig?.custom_cm_name || '移动',
   custom_bd_name: appConfig?.custom_bd_name || 'BGP',
+  node_1_name: appConfig?.node_1_name || 'Node 1',
+  node_2_name: appConfig?.node_2_name || 'Node 2',
+  node_3_name: appConfig?.node_3_name || 'Node 3',
+  node_4_name: appConfig?.node_4_name || 'Node 4',
   frontend_ws_timeout_minutes: normalizeLiveSocketTimeoutMinutes(appConfig?.frontend_ws_timeout_minutes),
   display_mode: 'bar',
   site_title: DEFAULT_SITE_TITLE,
@@ -684,6 +698,17 @@ const formatConnCount = (value) => {
 }
 
 const formatConnPair = (server) => `${formatConnCount(server.tcp_conn)} / ${formatConnCount(server.udp_conn)}`
+
+const isTablePingValid = value => value !== null && value !== undefined && value !== '' && Number.parseInt(value, 10) > 0
+const formatTablePing = value => isTablePingValid(value) ? `${Math.round(Number(value))}ms` : trans.value.timeout
+const getTablePingColor = value => {
+  if (!isTablePingValid(value)) return 'var(--accent-red)'
+  const latency = Number.parseInt(value, 10)
+  if (latency < PING.GOOD_THRESHOLD) return 'var(--accent-green)'
+  if (latency < PING.WARNING_THRESHOLD) return 'var(--accent-blue)'
+  if (latency < PING.CRITICAL_THRESHOLD) return 'var(--accent-yellow)'
+  return 'var(--accent-red)'
+}
 
 const formatSystemOs = (value) => {
   const raw = String(value || '').trim()
@@ -1004,6 +1029,10 @@ const refreshData = async () => {
           custom_cu_name: data.sysConfig?.custom_cu_name || sysConfig.value.custom_cu_name,
           custom_cm_name: data.sysConfig?.custom_cm_name || sysConfig.value.custom_cm_name,
           custom_bd_name: data.sysConfig?.custom_bd_name || sysConfig.value.custom_bd_name,
+          node_1_name: data.sysConfig?.node_1_name || sysConfig.value.node_1_name,
+          node_2_name: data.sysConfig?.node_2_name || sysConfig.value.node_2_name,
+          node_3_name: data.sysConfig?.node_3_name || sysConfig.value.node_3_name,
+          node_4_name: data.sysConfig?.node_4_name || sysConfig.value.node_4_name,
           frontend_ws_timeout_minutes: sysConfig.value.frontend_ws_timeout_minutes,
           display_mode: normalizeDisplayMode(data.sysConfig?.display_mode),
           site_title: sysConfig.value.site_title || DEFAULT_SITE_TITLE,
@@ -1047,6 +1076,10 @@ const refreshData = async () => {
       custom_cu_name: data.sysConfig?.custom_cu_name || sysConfig.value.custom_cu_name,
       custom_cm_name: data.sysConfig?.custom_cm_name || sysConfig.value.custom_cm_name,
       custom_bd_name: data.sysConfig?.custom_bd_name || sysConfig.value.custom_bd_name,
+      node_1_name: data.sysConfig?.node_1_name || sysConfig.value.node_1_name,
+      node_2_name: data.sysConfig?.node_2_name || sysConfig.value.node_2_name,
+      node_3_name: data.sysConfig?.node_3_name || sysConfig.value.node_3_name,
+      node_4_name: data.sysConfig?.node_4_name || sysConfig.value.node_4_name,
       frontend_ws_timeout_minutes: sysConfig.value.frontend_ws_timeout_minutes,
       display_mode: normalizeDisplayMode(data.sysConfig?.display_mode),
       site_title: sysConfig.value.site_title || DEFAULT_SITE_TITLE,

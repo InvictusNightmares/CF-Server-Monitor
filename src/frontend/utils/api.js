@@ -333,8 +333,16 @@ const mergeSiteResult = (mergedData, { data, error, baseUrl }, multiSite, localT
     ? data.servers
     : Object.entries(data.latestMetricsMap || {}).map(([id, metrics]) => ({ id, ...metrics }))
 
+  const siteNodeNames = Object.fromEntries([1, 2, 3, 4].map(index => {
+    const field = `node_${index}_name`
+    return [field, data.sysConfig?.[field] || `Node ${index}`]
+  }))
   for (const server of rawServers) {
-    mergedData.servers.push({ ...server, source: baseUrl })
+    mergedData.servers.push({
+      ...server,
+      ...Object.fromEntries(Object.entries(siteNodeNames).map(([field, name]) => [field, server[field] || name])),
+      source: baseUrl
+    })
   }
 
   const latestReportUpdates = Array.isArray(data.latestReportUpdates) ? data.latestReportUpdates : []

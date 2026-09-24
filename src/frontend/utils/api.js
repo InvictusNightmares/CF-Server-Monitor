@@ -333,8 +333,16 @@ const mergeSiteResult = (mergedData, { data, error, baseUrl }, multiSite, localT
     ? data.servers
     : Object.entries(data.latestMetricsMap || {}).map(([id, metrics]) => ({ id, ...metrics }))
 
+  const siteNodeNames = Object.fromEntries([1, 2, 3, 4].map(index => {
+    const field = `node_${index}_name`
+    return [field, data.sysConfig?.[field] || `Node ${index}`]
+  }))
   for (const server of rawServers) {
-    mergedData.servers.push({ ...server, source: baseUrl })
+    mergedData.servers.push({
+      ...server,
+      ...Object.fromEntries(Object.entries(siteNodeNames).map(([field, name]) => [field, server[field] || name])),
+      source: baseUrl
+    })
   }
 
   const latestReportUpdates = Array.isArray(data.latestReportUpdates) ? data.latestReportUpdates : []
@@ -365,10 +373,6 @@ const mergeSiteResult = (mergedData, { data, error, baseUrl }, multiSite, localT
       show_expire: data.sysConfig.show_expire ?? mergedData.sysConfig.show_expire,
       show_tf: data.sysConfig.show_tf ?? mergedData.sysConfig.show_tf,
       show_three_net_details: data.sysConfig.show_three_net_details ?? mergedData.sysConfig.show_three_net_details,
-      node_1_name: data.sysConfig.node_1_name || mergedData.sysConfig.node_1_name,
-      node_2_name: data.sysConfig.node_2_name || mergedData.sysConfig.node_2_name,
-      node_3_name: data.sysConfig.node_3_name || mergedData.sysConfig.node_3_name,
-      node_4_name: data.sysConfig.node_4_name || mergedData.sysConfig.node_4_name,
       display_mode: resolveDisplayMode(data.sysConfig, mergedData.sysConfig.display_mode),
       site_title: multiSite ? localTitle : mergedData.sysConfig.site_title,
       latency_window: data.sysConfig.latency_window ?? mergedData.sysConfig.latency_window

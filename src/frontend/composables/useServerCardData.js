@@ -23,6 +23,15 @@ const THREE_NET_DEFS = [
   { key: 'cm', pingField: 'ping_cm', lossField: 'loss_cm', labelKey: 'pingCm', fallbackLabel: 'CM' }
 ]
 
+const CUSTOM_NODE_DEFS = [1, 2, 3, 4].map(index => ({
+  key: `node_${index}`,
+  pingField: `ping_node_${index}`,
+  lossField: `loss_node_${index}`,
+  configField: `node_${index}`,
+  nameField: `node_${index}_name`,
+  fallbackLabel: `Node ${index}`
+}))
+
 const DEFAULT_THREE_NET_POINT_COUNT = LATENCY_WINDOW.POINTS
 
 const normalizeLatencyTimestamp = (value, fallback = 0) => {
@@ -369,9 +378,17 @@ export function useServerCardData(props) {
     return Math.max(pingCount, lossCount, getLatencyWindowConfigPointCount())
   }
 
-  const threeNetDetails = computed(() => THREE_NET_DEFS
+  const threeNetDetails = computed(() => [
+    ...THREE_NET_DEFS,
+    ...CUSTOM_NODE_DEFS.filter(def => {
+      const ping = props.server[def.pingField]
+      return String(props.server[def.configField] || '').trim()
+        || (ping !== undefined && !isPingDisabled(ping))
+    })
+  ]
     .map(def => {
-      const customName = props.sysConfig?.[`custom_${def.key}_name`]
+      const nameField = def.nameField || `custom_${def.key}_name`
+      const customName = props.server[nameField] || props.sysConfig?.[nameField]
       const label = String(customName || trans.value[def.labelKey] || def.fallbackLabel)
       const pingSeries = getLatencySeries('ping', def.key)
       const lossSeries = getLatencySeries('loss', def.key)

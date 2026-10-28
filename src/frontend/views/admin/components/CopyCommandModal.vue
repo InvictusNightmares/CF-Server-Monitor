@@ -14,9 +14,26 @@
             <option value="unix">OpenWrt/Alpine/Synology DSM/FreeBSD</option>
             <option value="mac">macOS</option>
             <option value="windows">Windows</option>
+            <option value="docker">Docker</option>
           </select>
         </div>
 
+        <div class="form-group flex-1">
+          <label class="form-label">
+            Agent {{ trans.version }}
+            <HelpTooltip :text="targetOs === 'docker' ? trans.dockerVersionTip : trans.installVersionTip" />
+          </label>
+          <input
+            type="text"
+            :value="installVersion"
+            class="form-input"
+            :placeholder="targetOs === 'docker' ? 'latest' : trans.installVersionPlaceholder"
+            @input="$emit('update:install-version', $event.target.value)"
+          >
+        </div>
+      </div>
+
+      <div v-if="targetOs !== 'docker'" class="form-row">
         <div v-if="targetOs === 'linux'" class="form-group flex-1">
           <label class="form-label">
             {{ trans.installMode }}
@@ -27,9 +44,7 @@
             <option value="cfsm-user">{{ trans.installModeCfsmUser }}</option>
           </select>
         </div>
-      </div>
 
-      <div class="form-row">
         <div class="form-group flex-1">
           <label class="form-label">
             {{ trans.ghProxy }}
@@ -46,20 +61,6 @@
             class="form-input mt-2"
             :placeholder="trans.ghProxyPlaceholder"
             @input="$emit('update:install-gh-proxy', $event.target.value)"
-          >
-        </div>
-
-        <div class="form-group flex-1">
-          <label class="form-label">
-            Agent {{ trans.version }}
-            <HelpTooltip :text="trans.installVersionTip" />
-          </label>
-          <input
-            type="text"
-            :value="installVersion"
-            class="form-input"
-            :placeholder="trans.installVersionPlaceholder"
-            @input="$emit('update:install-version', $event.target.value)"
           >
         </div>
       </div>
@@ -131,7 +132,6 @@
       </div>
 
       <div class="form-group">
-        <label class="form-label">{{ trans.installCommand }}</label>
         <div class="cmd-output-wrapper" :class="{ copied: copiedCmd }">
           <span class="cmd-prompt">{{ targetOs === 'windows' ? 'PS' : '$' }}</span>
           <pre class="cmd-output">{{ installCommand }}</pre>
@@ -140,7 +140,7 @@
 
       <div class="modal-footer flex-justify-between">
         <div class="flex items-center gap-2">
-          <button @click="$emit('copy-cmd')" class="btn btn-primary">{{ copiedCmd ? '✅ ' + trans.copied : '📋 ' + trans.copy }}</button> <button @click="$emit('open-edit-from-copy')" class="btn btn-blue">✏️ {{ trans.edit }}</button>
+          <button @click="$emit('copy-cmd')" class="btn btn-primary">{{ copiedCmd ? '✅ ' + trans.copied : '📋 ' + trans.copy }}</button> &nbsp; <button @click="$emit('open-edit-from-copy')" class="btn btn-blue">✏️ {{ trans.edit }}</button>
         </div>
         <button @click="$emit('close')" class="btn">{{ trans.cancel }}</button>
       </div>

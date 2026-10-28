@@ -14,9 +14,7 @@
       :turnstile-login-enabled="turnstileLoginEnabled"
       :turnstile-enabled="turnstileEnabled"
       :turnstile-verified="turnstileVerified"
-      :github-o-auth-enabled="githubOAuthEnabled"
       @login="handleLogin"
-      @github-login="handleGithubLogin"
       @toggle-password="togglePassword"
       @api-index-change="handleApiIndexChange"
     />
@@ -115,15 +113,17 @@
           :groups="groups"
           :active-tab="activeTab"
           :selected-api-index="selectedApiIndex"
-          :theme-url="settings.theme_url"
           :latest-agent-version="latestAgentVersion"
+          :cache-refreshing="cacheRefreshing"
           :copied-server-id="copiedServerId"
           :copied-note-server-id="copiedNoteServerId"
           :copied-spec-key="copiedSpecKey"
           @add-server="addServer"
+          @auto-discovery-cmd="openAutoDiscoveryModal"
           @batch-edit="openBatchEditModal"
           @batch-delete="batchDelete"
           @toggle-select-all="toggleSelectAll"
+          @refresh-cache="refreshServersCache"
           @select-all="handleSelectAll"
           @drag-start="handleDragStart"
           @drop="handleDrop"
@@ -148,7 +148,6 @@
           :change-admin-password="changeAdminPassword"
           :test-notification-loading="testNotificationLoading"
           :d1-usage-loading="d1UsageLoading"
-          :github-binding-loading="githubBindingLoading"
           @toggle-password="togglePassword"
           @toggle-admin-password-change="toggleAdminPasswordChange"
           @save-settings="saveSettings"
@@ -157,7 +156,6 @@
           @upload-favicon="uploadFavicon"
           @send-test-notification="sendTestNotification"
           @query-d1-usage="queryD1Usage"
-          @bind-github-account="bindGithubAccount"
           @alert-message="alertMessage = $event"
         />
 
@@ -290,6 +288,27 @@
         @update:install-gh-proxy="installGhProxy = $event"
         @update:install-version="installVersion = $event"
         @open-edit-from-copy="openEditModalFromCopy"
+      />
+
+      <AutoDiscoveryCommandModal
+        :trans="trans"
+        :show="showAutoDiscoveryModal"
+        :target-os="autoDiscoveryTargetOs"
+        :install-mode="autoDiscoveryInstallMode"
+        :name="autoDiscoveryName"
+        :version="autoDiscoveryVersion"
+        :auto-update="autoDiscoveryAutoUpdate"
+        :gh-proxy="autoDiscoveryGhProxy"
+        :install-command="getAutoDiscoveryInstallCommand()"
+        :copied="autoDiscoveryCopied"
+        @close="closeAutoDiscoveryModal"
+        @copy-cmd="copyAutoDiscoveryCmd"
+        @update:target-os="autoDiscoveryTargetOs = $event"
+        @update:install-mode="autoDiscoveryInstallMode = $event"
+        @update:name="autoDiscoveryName = $event"
+        @update:version="autoDiscoveryVersion = $event"
+        @update:auto-update="autoDiscoveryAutoUpdate = $event"
+        @update:gh-proxy="autoDiscoveryGhProxy = $event"
       />
 
       <div id="dbModal" class="modal-overlay" :class="{ active: showDbModal }">
@@ -591,14 +610,15 @@ import EditServerModal from './components/EditServerModal.vue'
 import BatchEditServersModal from './components/BatchEditServersModal.vue'
 import DeleteServerModal from './components/DeleteServerModal.vue'
 import CopyCommandModal from './components/CopyCommandModal.vue'
-import { adminApi, login, startGithubLogin, logout as apiLogout, upgradeDatabase, clearHistory, getApiBases, fetchConfig } from '../../utils/api'
-import { hasMultipleApiBases } from '../../utils/config.js'
+import AutoDiscoveryCommandModal from './components/AutoDiscoveryCommandModal.vue'
+import { adminApi, login, logout as apiLogout, upgradeDatabase, clearHistory, fetchConfig } from '../../utils/api'
+import { hasMultipleApiBases, getApiBases } from '../../utils/config.js'
 import { copyTextToClipboard } from '../../utils/clipboard.js'
-import { t, useTranslation } from '../../utils/i18n'
+import { normalizeLanguagePreference, normalizeNotificationLanguagePreference, t, useTranslation } from '../../utils/i18n'
 import { PING_NODE_FIELDS, validatePingNode } from '../../utils/pingNode.js'
 import { normalizeDisplayMode, resolveDisplayMode } from '../../utils/displayMode.js'
 import { applyMikusThemeOptions } from '../../utils/themeOptions.js'
-import { FRONTEND_WS_TIMEOUT_MINUTES_MAX, HISTORY } from '../../utils/constants.js'
+import { FRONTEND_WS_TIMEOUT_MINUTES_MAX, HISTORY, STORAGE } from '../../utils/constants.js'
 import { usePasswordVisibility } from '../../composables/usePasswordVisibility'
 import { useTurnstile } from './composables/useTurnstile'
 import { detectBillingCycle, detectCurrencySymbol, normalizeBillingCycle, normalizeCurrency, normalizePrice, renewExpireDateIfNeeded } from '../../utils/server.js'
@@ -822,10 +842,9 @@ const normalizePreferredThemeSetting = (value) => {
   return ['dark', 'light', 'auto'].includes(theme) ? theme : 'auto'
 }
 
-const normalizeDefaultLanguageSetting = (value) => {
-  const language = String(value || '').trim().toLowerCase()
-  return ['zh', 'en', 'auto'].includes(language) ? language : 'auto'
-}
+const normalizeDefaultLanguageSetting = (value) => normalizeLanguagePreference(value)
+
+const normalizeNotificationLanguageSetting = (value) => normalizeNotificationLanguagePreference(value)
 
 const formatThemeOptions = (value) => {
   const normalized = value === undefined || value === null ? {} : value
@@ -933,6 +952,7 @@ const settings = ref({
   preferred_theme: 'auto',
   default_language: 'auto',
   theme_options: '{}',
+  auto_discovery: false,
   is_public: false,
   show_price: true,
   show_expire: true,
@@ -945,9 +965,11 @@ const settings = ref({
   tg_notify: '0',
   expire_reminder: '0',
   resource_alert_rules: [],
+  traffic_alert_threshold: 0,
   tg_bot_token: '',
   tg_chat_id: '',
   notification_timezone: 'UTC',
+  notification_language: 'zh',
   expire_notification_time: '12',
   notification_webhook_enabled: false,
   notification_webhook_url: '',
@@ -960,11 +982,6 @@ const settings = ref({
   turnstile_login_enabled: false,
   turnstile_site_key: '',
   turnstile_secret_key: '',
-  github_oauth_enabled: false,
-  github_client_id: '',
-  github_client_secret: '',
-  github_client_secret_configured: false,
-  github_user_id: '',
   cloudflare_account_id: '',
   cloudflare_token: '',
   jwt_secret: '',
@@ -985,6 +1002,8 @@ const settings = ref({
   csp_api: ''
 })
 const apiSecret = ref('')
+const cacheRefreshing = ref(false)
+const savedAutoDiscovery = ref(false)
 const changeAdminPassword = ref(false)
 
 const clearAdminPasswordInputs = () => {
@@ -1006,12 +1025,12 @@ const toggleAdminPasswordChange = () => {
 }
 
 const { visibility: passwordVisible, toggle: togglePassword } = usePasswordVisibility([
-  'login', 'tgBotToken', 'tgChatId', 'notificationWebhookUrl', 'smtpPassword', 'turnstileSecret', 'githubClientSecret', 'cloudflareToken', 'jwtSecret', 'password', 'confirmPassword'
+  'login', 'tgBotToken', 'tgChatId', 'notificationWebhookUrl', 'smtpPassword', 'turnstileSecret', 'cloudflareToken', 'jwtSecret', 'password', 'confirmPassword'
 ])
 
 const {
   turnstileEnabled, turnstileLoginEnabled, turnstileSiteKey,
-  turnstileToken, turnstileVerified, githubOAuthEnabled,
+  turnstileToken, turnstileVerified,
   hasSharedTurnstileVerified, loadTurnstileConfig: loadTurnstileConfigBase,
   renderTurnstile, resetTurnstile, clearTurnstile
 } = useTurnstile()
@@ -1033,6 +1052,7 @@ const editForm = ref({
   expire_date: '',
   traffic_limit: '',
   traffic_calc_type: 'total',
+  traffic_alert_percent: null,
   interface: '',
   reset_day: 1,
   collect_interval: 0,
@@ -1063,6 +1083,7 @@ const createBatchEditDefaults = () => ({
   expire_date: '',
   traffic_limit: '',
   traffic_calc_type: 'total',
+  traffic_alert_percent: null,
   interface: '',
   reset_day: 1,
   collect_interval: 0,
@@ -1105,7 +1126,6 @@ const dbLoading = ref(false)
 const dbResult = ref(null)
 const d1UsageLoading = ref(false)
 const d1UsageResult = ref(null)
-const githubBindingLoading = ref(false)
 const validationError = ref(null)
 const alertMessage = ref(null)
 const showAutoUpdateWarning = ref(false)
@@ -1144,6 +1164,14 @@ const rxCorrection = ref('')
 const txCorrection = ref('')
 const autoUpdate = ref(false)
 const copiedCmd = ref(false)
+const showAutoDiscoveryModal = ref(false)
+const autoDiscoveryTargetOs = ref('linux')
+const autoDiscoveryInstallMode = ref('current-user')
+const autoDiscoveryName = ref('')
+const autoDiscoveryVersion = ref('')
+const autoDiscoveryAutoUpdate = ref(false)
+const autoDiscoveryGhProxy = ref('')
+const autoDiscoveryCopied = ref(false)
 
 const isWssReportEnabled = computed(() => settings.value.wss_report_enabled === true)
 const getEffectiveConnectionMode = (value) => {
@@ -1260,34 +1288,6 @@ const handleLogin = async () => {
   loginLoading.value = false
 }
 
-const handleGithubLogin = async () => {
-  loginError.value = ''
-  if ((turnstileLoginEnabled.value || turnstileEnabled.value) && !turnstileToken.value) {
-    loginError.value = 'Please complete the verification'
-    return
-  }
-
-  loginLoading.value = true
-  try {
-    const result = await startGithubLogin(selectedApiIndex.value)
-    if (!result.error && result.data?.authorize_url) {
-      window.location.assign(result.data.authorize_url)
-      return
-    }
-    loginError.value = result.status === 403
-      ? 'Please complete the verification'
-      : trans.value.githubOAuthFailed
-    if (result.status === 403) {
-      clearTurnstile()
-      resetTurnstile('#admin-turnstile-container')
-    }
-  } catch (_) {
-    loginError.value = trans.value.githubOAuthFailed
-  } finally {
-    loginLoading.value = false
-  }
-}
-
 const logout = async () => {
   try {
     await adminApiForSite({ action: 'logout' })
@@ -1302,34 +1302,8 @@ const logout = async () => {
 }
 
 const checkLoginStatus = () => {
-  const token = localStorage.getItem('jwt_token')
+  const token = localStorage.getItem(STORAGE.JWT_TOKEN)
   return !!token || appConfig?.authorization === true
-}
-
-const getGithubLoginError = () => {
-  const error = String(route.query.github_error || '')
-  if (!error) return ''
-  const messages = {
-    not_configured: trans.value.githubOAuthNotConfigured,
-    not_bound: trans.value.githubOAuthNotBound,
-    binding_auth_required: trans.value.githubBindingAuthRequired,
-    invalid_state: trans.value.githubOAuthInvalidState,
-    cancelled: trans.value.githubOAuthCancelled,
-    missing_code: trans.value.githubOAuthFailed,
-    token_exchange_failed: trans.value.githubOAuthFailed,
-    user_lookup_failed: trans.value.githubOAuthFailed,
-    not_allowed: trans.value.githubOAuthNotAllowed,
-    request_failed: trans.value.githubOAuthFailed
-  }
-  return messages[error] || trans.value.githubOAuthFailed
-}
-
-const clearGithubOAuthQuery = () => {
-  if (!route.query.github_bound && !route.query.github_error) return
-  const query = { ...route.query }
-  delete query.github_bound
-  delete query.github_error
-  router.replace({ path: '/admin', query })
 }
 
 const initAdmin = async () => {
@@ -1337,7 +1311,7 @@ const initAdmin = async () => {
   if (hasCreds) {
     isLoggedIn.value = true
     syncApiIndexQuery()
-    const savedTurnstileToken = localStorage.getItem('turnstile_token')
+    const savedTurnstileToken = localStorage.getItem(STORAGE.TURNSTILE_TOKEN)
     if (savedTurnstileToken) {
       turnstileToken.value = savedTurnstileToken
     }
@@ -1346,18 +1320,8 @@ const initAdmin = async () => {
       loadServers(),
       loadLatestAgentVersion()
     ])
-    if (route.query.github_bound === '1') {
-      activeTab.value = 'settings'
-      saveResult.value = { success: true, message: trans.value.githubBindingSuccess }
-    } else if (route.query.github_error) {
-      activeTab.value = 'settings'
-      saveResult.value = { success: false, error: getGithubLoginError() }
-    }
-    clearGithubOAuthQuery()
   } else {
     await loadTurnstileConfig()
-    loginError.value = getGithubLoginError()
-    clearGithubOAuthQuery()
   }
 }
 
@@ -1441,6 +1405,7 @@ const loadSettings = async () => {
         preferred_theme: normalizePreferredThemeSetting(settingsData.preferred_theme),
         default_language: normalizeDefaultLanguageSetting(settingsData.default_language),
         theme_options: formatThemeOptions(settingsData.theme_options),
+        auto_discovery: settingsData.auto_discovery === 'true' || settingsData.auto_discovery === true,
         is_public: settingsData.is_public === 'true',
         show_price: settingsData.show_price === 'true',
         show_expire: settingsData.show_expire === 'true',
@@ -1453,9 +1418,11 @@ const loadSettings = async () => {
         tg_notify: normalizeTgNotifySetting(settingsData.tg_notify),
         expire_reminder: normalizeExpireReminderSetting(settingsData.expire_reminder),
         resource_alert_rules: normalizeResourceAlertRulesSetting(settingsData.resource_alert_rules),
+        traffic_alert_threshold: Number(settingsData.traffic_alert_threshold) || 0,
         tg_bot_token: settingsData.tg_bot_token || '',
         tg_chat_id: settingsData.tg_chat_id || '',
         notification_timezone: normalizeNotificationTimezoneSetting(settingsData.notification_timezone),
+        notification_language: normalizeNotificationLanguageSetting(settingsData.notification_language),
         expire_notification_time: normalizeExpireNotificationTimeSetting(settingsData.expire_notification_time),
         notification_webhook_enabled: settingsData.notification_webhook_enabled === 'true' || settingsData.notification_webhook_enabled === true,
         notification_webhook_url: settingsData.notification_webhook_url || '',
@@ -1468,11 +1435,6 @@ const loadSettings = async () => {
         turnstile_login_enabled: settingsData.turnstile_login_enabled === 'true',
         turnstile_site_key: settingsData.turnstile_site_key || '',
         turnstile_secret_key: settingsData.turnstile_secret_key || '',
-        github_oauth_enabled: settingsData.github_oauth_enabled === 'true' || settingsData.github_oauth_enabled === true,
-        github_client_id: settingsData.github_client_id || '',
-        github_client_secret: '',
-        github_client_secret_configured: settingsData.github_client_secret_configured === true,
-        github_user_id: settingsData.github_user_id || '',
         cloudflare_account_id: settingsData.cloudflare_account_id || '',
         cloudflare_token: settingsData.cloudflare_token || '',
         jwt_secret: '',
@@ -1497,6 +1459,8 @@ const loadSettings = async () => {
       applyMikusThemeOptions(settingsData.theme_options)
       changeAdminPassword.value = !settings.value.password_configured || !String(settings.value.username || '').trim()
       apiSecret.value = data.api_secret || ''
+      // 只有已保存到服务端的自动发现开关才提供复制安装命令，避免复制出当前并未生效的命令
+      savedAutoDiscovery.value = settings.value.auto_discovery
     }
   } catch (e) {
     console.error('[ERROR] Load settings failed:', e)
@@ -1588,17 +1552,6 @@ const saveSettings = async () => {
     }
   }
 
-  if (settings.value.github_oauth_enabled) {
-    if (!String(settings.value.github_client_id || '').trim()) {
-      validationError.value = trans.value.githubClientIdRequired
-      return
-    }
-    if (!settings.value.github_client_secret_configured && !String(settings.value.github_client_secret || '').trim()) {
-      validationError.value = trans.value.githubClientSecretRequired
-      return
-    }
-  }
-
   if (isTgNotifyEnabled(settings.value.tg_notify) || isExpireReminderEnabled(settings.value.expire_reminder) || isResourceAlertEnabled(settings.value.resource_alert_rules)) {
     if (isNotificationWebhookEnabled()) {
       if (!settings.value.notification_webhook_url || settings.value.notification_webhook_url.trim().length === 0) {
@@ -1653,6 +1606,7 @@ const saveSettings = async () => {
       appearance_options: {
         theme_options: themeOptionsResult.value
       },
+      auto_discovery: settings.value.auto_discovery ? 'true' : 'false',
       is_public: settings.value.is_public ? 'true' : 'false',
       show_price: settings.value.show_price ? 'true' : 'false',
       show_expire: settings.value.show_expire ? 'true' : 'false',
@@ -1665,9 +1619,11 @@ const saveSettings = async () => {
       tg_notify: normalizeTgNotifySetting(settings.value.tg_notify),
       expire_reminder: normalizeExpireReminderSetting(settings.value.expire_reminder),
       resource_alert_rules: normalizeResourceAlertRulesSetting(settings.value.resource_alert_rules),
+      traffic_alert_threshold: String(Math.max(0, Math.min(100, Number(settings.value.traffic_alert_threshold) || 0))),
       tg_bot_token: settings.value.tg_bot_token,
       tg_chat_id: settings.value.tg_chat_id,
       notification_timezone: normalizeNotificationTimezoneSetting(settings.value.notification_timezone),
+      notification_language: normalizeNotificationLanguageSetting(settings.value.notification_language),
       expire_notification_time: normalizeExpireNotificationTimeSetting(settings.value.expire_notification_time),
       notification_webhook_enabled: settings.value.notification_webhook_enabled ? 'true' : 'false',
       notification_webhook_url: settings.value.notification_webhook_url,
@@ -1680,8 +1636,6 @@ const saveSettings = async () => {
       turnstile_login_enabled: settings.value.turnstile_login_enabled ? 'true' : 'false',
       turnstile_site_key: settings.value.turnstile_site_key,
       turnstile_secret_key: settings.value.turnstile_secret_key,
-      github_oauth_enabled: settings.value.github_oauth_enabled ? 'true' : 'false',
-      github_client_id: settings.value.github_client_id,
       cloudflare_account_id: settings.value.cloudflare_account_id,
       cloudflare_token: settings.value.cloudflare_token,
       username: settings.value.username,
@@ -1708,11 +1662,6 @@ const saveSettings = async () => {
     data.settings.jwt_secret = jwtSecret
   }
 
-  const githubClientSecret = String(settings.value.github_client_secret || '').trim()
-  if (githubClientSecret) {
-    data.settings.github_client_secret = githubClientSecret
-  }
-
   try {
     const result = await adminApiForSite(data)
     if (!result.error) {
@@ -1721,7 +1670,6 @@ const saveSettings = async () => {
       clearAdminPasswordInputs()
       changeAdminPassword.value = false
       settings.value.jwt_secret = ''
-      settings.value.github_client_secret = ''
       loadSettings()
     } else {
       saveResult.value = { success: false, error: getMessage(result.error) || 'fail' }
@@ -1734,30 +1682,9 @@ const saveSettings = async () => {
 }
 
 
-const bindGithubAccount = async () => {
-  if (githubBindingLoading.value) return
-  githubBindingLoading.value = true
-  saveResult.value = null
+const loadServers = async (options = {}) => {
   try {
-    const result = await startGithubLogin(selectedApiIndex.value, 'bind')
-    if (!result.error && result.data?.authorize_url) {
-      window.location.assign(result.data.authorize_url)
-      return
-    }
-    saveResult.value = {
-      success: false,
-      error: getMessage(result.error) || trans.value.githubOAuthFailed
-    }
-  } catch (e) {
-    saveResult.value = { success: false, error: e.message || trans.value.githubOAuthFailed }
-  } finally {
-    githubBindingLoading.value = false
-  }
-}
-
-const loadServers = async () => {
-  try {
-    const result = await adminApiForSite({ action: 'list' })
+    const result = await adminApiForSite(options.refresh ? { action: 'list', refresh: true } : { action: 'list' })
     if (!result.error) {
       const data = result.data
       servers.value = data.servers || []
@@ -1766,8 +1693,26 @@ const loadServers = async () => {
       const serverGroups = [...new Set(servers.value.map(s => s.server_group || trans.value.default))]
       groups.value = serverGroups
     }
+    return result
   } catch (e) {
     console.error('[ERROR] Load servers failed:', e)
+    return { error: e.message }
+  }
+}
+
+// 清除 Workers 端服务器列表缓存并就地重新拉取（list 带 refresh 时服务端先清缓存再读 D1）
+const refreshServersCache = async () => {
+  if (cacheRefreshing.value) return
+  cacheRefreshing.value = true
+  try {
+    const result = await loadServers({ refresh: true })
+    if (result?.error) {
+      alertMessage.value = getMessage(result.error) || result.error || trans.value.operationFailed
+      return
+    }
+    alertMessage.value = trans.value.cacheCleared
+  } finally {
+    cacheRefreshing.value = false
   }
 }
 
@@ -1821,12 +1766,12 @@ const getUninstallCommand = () => {
   if (isGo) {
     if (deleteTargetOs.value === 'windows') {
       const ghUrl = buildGhRawUrl(proxy, '/huilang-me/cfsm-agent/main/install.ps1')
-      const proxyParam = proxy ? ` ${quotePowerShellArg(`--install-ghproxy=${proxy}`)}` : ''
+      const proxyParam = proxy ? ` --install-ghproxy=${quotePowerShellArg(proxy)}` : ''
       return `$script = "$env:TEMP\\install-cf-probe.ps1"; Invoke-WebRequest -Uri ${quotePowerShellArg(ghUrl)} -OutFile $script -UseBasicParsing; PowerShell -ExecutionPolicy Bypass -File $script uninstall${proxyParam}`
     }
     const sudoPrefix = deleteTargetOs.value === 'mac' ? 'sudo ' : ''
     const ghUrl = buildGhRawUrl(proxy, '/huilang-me/cfsm-agent/main/install.sh')
-    const proxyParam = proxy ? ` ${quotePosixShellArg(`--install-ghproxy=${proxy}`)}` : ''
+    const proxyParam = proxy ? ` --install-ghproxy=${quotePosixShellArg(proxy)}` : ''
     const uninstallCommand = `curl -fsSL ${quotePosixShellArg(ghUrl)} | ${sudoPrefix}sh -s -- uninstall${proxyParam}`
     if (deleteTargetOs.value === 'linux' && deleteInstallMode.value === 'cfsm-user') {
       return buildUninstallAsCfsmCommand(uninstallCommand)
@@ -1882,8 +1827,6 @@ const copyCmd = (serverId) => {
   copiedCmd.value = false
   showCopyModal.value = true
 }
-
-const hasCorrectionValue = (value) => value !== null && value !== undefined && value !== ''
 
 const buildGhRawUrl = (proxy, path) => {
   const base = 'https://raw.githubusercontent.com'
@@ -1958,64 +1901,127 @@ const getCustomInstallCommand = () => {
   const autoUpdateFlag = autoUpdate.value ? 1 : 0
   const proxy = installGhProxy.value.trim()
   const version = installVersion.value.trim()
-  const effectiveConnectionMode = getEffectiveConnectionMode(connectionMode.value)
   const isDedicatedUserInstall = targetOs.value === 'linux' && installMode.value === 'cfsm-user'
-  const effectivePingMode = getEffectivePingMode(isDedicatedUserInstall ? 'tcp' : pingMode.value)
+  // 安装命令只保留必须写入本地的参数：id / secret / url / auto_update。
+  // collect_interval、interval、connection_mode、ping_mode、reset_day、ct/cu/cm/bd、node_1..4、interface、rx/tx_correction
+  // 等属于后端 /api 动态下发的配置（见 agentConfig.buildAgentConfig），Agent 启动后会自动拉取，无需写进安装命令。
   if (targetOs.value === 'windows') {
     const params = [
       'install'
     ]
-    if (proxy) params.push(quotePowerShellArg(`--install-ghproxy=${proxy}`))
-    if (version) params.push(quotePowerShellArg(`--install-version=${version}`))
+    if (proxy) params.push(`--install-ghproxy=${quotePowerShellArg(proxy)}`)
+    if (version) params.push(`--install-version=${quotePowerShellArg(version)}`)
     params.push(
       `-id='${copyServerId.value}'`,
-      `-secret='${apiSecret.value}'`,
+      `-secret=${quotePowerShellArg(apiSecret.value)}`,
       `-url='${HOST}/update'`,
-      `-collect_interval='${collectInterval.value}'`,
-      `-interval='${reportInterval.value}'`,
-      `-connection_mode='${effectiveConnectionMode}'`,
-      `-ping_mode='${effectivePingMode}'`,
-      `-reset_day='${resetDay.value ?? 1}'`,
       `-auto_update='${autoUpdateFlag}'`
     )
-    if (customCt.value || explicitEmptyNodes.value.custom_ct) params.push(`-ct='${customCt.value}'`)
-    if (customCu.value || explicitEmptyNodes.value.custom_cu) params.push(`-cu='${customCu.value}'`)
-    if (customCm.value || explicitEmptyNodes.value.custom_cm) params.push(`-cm='${customCm.value}'`)
-    if (customBd.value || explicitEmptyNodes.value.custom_bd) params.push(`-bd='${customBd.value}'`)
-    if (node1.value || explicitEmptyNodes.value.node_1) params.push(`-node_1='${node1.value}'`); if (node2.value || explicitEmptyNodes.value.node_2) params.push(`-node_2='${node2.value}'`); if (node3.value || explicitEmptyNodes.value.node_3) params.push(`-node_3='${node3.value}'`); if (node4.value || explicitEmptyNodes.value.node_4) params.push(`-node_4='${node4.value}'`)
-    if (networkInterface.value) params.push(`-interface='${networkInterface.value}'`)
-    if (hasCorrectionValue(rxCorrection.value)) params.push(`-rx_correction='${rxCorrection.value}'`)
-    if (hasCorrectionValue(txCorrection.value)) params.push(`-tx_correction='${txCorrection.value}'`)
     const ghUrl = buildGhRawUrl(proxy, '/huilang-me/cfsm-agent/main/install.ps1')
     return `$script = "$env:TEMP\\install-cf-probe.ps1"; Invoke-WebRequest -Uri ${quotePowerShellArg(ghUrl)} -OutFile $script -UseBasicParsing; PowerShell -ExecutionPolicy Bypass -File $script ${params.join(' ')}`
   }
+  if (targetOs.value === 'docker') {
+    const safeTag = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(version) ? version : 'latest'
+    const image = `ghcr.io/huilang-me/cfsm-agent:${safeTag}`
+    return [
+      'docker run -d --name cf-probe --restart=unless-stopped --network=host \\',
+      '  -v cf-probe-data:/data \\',
+      `  -e SERVER_ID=${quotePosixShellArg(copyServerId.value)} -e SECRET=${quotePosixShellArg(apiSecret.value)} -e WORKER_URL=${quotePosixShellArg(`${HOST}/update`)} \\`,
+      `  ${image}`
+    ].join('\n')
+  }
   const params = ['install']
-  if (proxy) params.push(quotePosixShellArg(`--install-ghproxy=${proxy}`))
-  if (version) params.push(quotePosixShellArg(`--install-version=${version}`))
+  if (proxy) params.push(`--install-ghproxy=${quotePosixShellArg(proxy)}`)
+  if (version) params.push(`--install-version=${quotePosixShellArg(version)}`)
   params.push(
     `-id=${copyServerId.value}`,
-    `-secret='${apiSecret.value}'`,
+    `-secret=${quotePosixShellArg(apiSecret.value)}`,
     `-url=${HOST}/update`,
-    `-collect_interval=${collectInterval.value}`,
-    `-interval=${reportInterval.value}`,
-    `-connection_mode=${effectiveConnectionMode}`,
-    `-ping_mode=${effectivePingMode}`,
-    `-reset_day=${resetDay.value ?? 1}`,
     `-auto_update=${autoUpdateFlag}`
   )
-  if (customCt.value || explicitEmptyNodes.value.custom_ct) params.push(`-ct='${customCt.value}'`)
-  if (customCu.value || explicitEmptyNodes.value.custom_cu) params.push(`-cu='${customCu.value}'`)
-  if (customCm.value || explicitEmptyNodes.value.custom_cm) params.push(`-cm='${customCm.value}'`)
-  if (customBd.value || explicitEmptyNodes.value.custom_bd) params.push(`-bd='${customBd.value}'`)
-  if (node1.value || explicitEmptyNodes.value.node_1) params.push(`-node_1='${node1.value}'`); if (node2.value || explicitEmptyNodes.value.node_2) params.push(`-node_2='${node2.value}'`); if (node3.value || explicitEmptyNodes.value.node_3) params.push(`-node_3='${node3.value}'`); if (node4.value || explicitEmptyNodes.value.node_4) params.push(`-node_4='${node4.value}'`)
-  if (networkInterface.value) params.push(`-interface=${networkInterface.value}`)
-  if (hasCorrectionValue(rxCorrection.value)) params.push(`-rx_correction=${rxCorrection.value}`)
-  if (hasCorrectionValue(txCorrection.value)) params.push(`-tx_correction=${txCorrection.value}`)
   const ghUrl = buildGhRawUrl(proxy, '/huilang-me/cfsm-agent/main/install.sh')
   const installCommand = `curl -fsSL ${quotePosixShellArg(ghUrl)} | sh -s -- ${params.join(' ')}`
   if (!isDedicatedUserInstall) return installCommand
 
   return buildInstallAsCfsmCommand(installCommand, trans.value.nonRootInstallRunStep)
+}
+
+// 自动发现模式下安装命令不带 -id：Agent 首次上报时由服务端自动创建服务器。
+// name 留空时服务端回退到请求来源 IP；安装用户、代理、版本、名称与自动更新仅影响本次生成的命令。
+const buildAutoDiscoveryCommand = ({ targetOs: os = 'linux', installMode: mode = 'current-user', ghProxy = '', name = '', version = '', autoUpdate = false } = {}) => {
+  const HOST = selectedApiBase.value
+  const proxy = String(ghProxy || '').trim()
+  const agentVersion = String(version || '').trim()
+  const autoUpdateFlag = autoUpdate ? 1 : 0
+  const serverName = String(name || '')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .trim()
+    .slice(0, 100)
+
+  if (os === 'windows') {
+    const params = ['install']
+    if (proxy) params.push(`--install-ghproxy=${quotePowerShellArg(proxy)}`)
+    if (agentVersion) params.push(`--install-version=${quotePowerShellArg(agentVersion)}`)
+    params.push(
+      `-secret=${quotePowerShellArg(apiSecret.value)}`,
+      `-url='${HOST}/update'`,
+      `-auto_update='${autoUpdateFlag}'`
+    )
+    if (serverName) params.push(`-name=${quotePowerShellArg(serverName)}`)
+    const ghUrl = buildGhRawUrl(proxy, '/huilang-me/cfsm-agent/main/install.ps1')
+    return `$script = "$env:TEMP\\install-cf-probe.ps1"; Invoke-WebRequest -Uri ${quotePowerShellArg(ghUrl)} -OutFile $script -UseBasicParsing; PowerShell -ExecutionPolicy Bypass -File $script ${params.join(' ')}`
+  }
+
+  const params = ['install']
+  if (proxy) params.push(`--install-ghproxy=${quotePosixShellArg(proxy)}`)
+  if (agentVersion) params.push(`--install-version=${quotePosixShellArg(agentVersion)}`)
+  params.push(
+    `-secret=${quotePosixShellArg(apiSecret.value)}`,
+    `-url=${HOST}/update`,
+    `-auto_update=${autoUpdateFlag}`
+  )
+  if (serverName) params.push(`-name=${quotePosixShellArg(serverName)}`)
+  const ghUrl = buildGhRawUrl(proxy, '/huilang-me/cfsm-agent/main/install.sh')
+  const installCommand = `curl -fsSL ${quotePosixShellArg(ghUrl)} | sh -s -- ${params.join(' ')}`
+  if (os !== 'linux' || mode !== 'cfsm-user') return installCommand
+
+  return buildInstallAsCfsmCommand(installCommand, trans.value.nonRootInstallRunStep)
+}
+
+const getAutoDiscoveryInstallCommand = () => buildAutoDiscoveryCommand({
+  targetOs: autoDiscoveryTargetOs.value,
+  installMode: autoDiscoveryInstallMode.value,
+  ghProxy: autoDiscoveryGhProxy.value,
+  name: autoDiscoveryName.value,
+  version: autoDiscoveryVersion.value,
+  autoUpdate: autoDiscoveryAutoUpdate.value
+})
+
+const openAutoDiscoveryModal = () => {
+  if (!savedAutoDiscovery.value) {
+    alertMessage.value = trans.value.autoAddDisabledTip
+    return
+  }
+
+  autoDiscoveryCopied.value = false
+  showAutoDiscoveryModal.value = true
+}
+
+const closeAutoDiscoveryModal = () => {
+  showAutoDiscoveryModal.value = false
+}
+
+const copyAutoDiscoveryCmd = async () => {
+  const copied = await copyTextToClipboard(getAutoDiscoveryInstallCommand())
+  if (!copied) {
+    alertMessage.value = trans.value.httpsRequired
+    return
+  }
+
+  autoDiscoveryCopied.value = true
+  setTimeout(() => {
+    autoDiscoveryCopied.value = false
+  }, 1500)
 }
 
 const copyCustomCmd = async () => {
@@ -2058,6 +2064,14 @@ const copyUninstallCmd = async () => {
   }, 1500)
 }
 
+// 逐台月流量告警阈值：空/未设置 → null（跟随全局）；否则夹取 0..100 整数（0 = 该服务器显式关闭）
+const normalizeTrafficAlertPercentField = (value) => {
+  if (value === '' || value === null || value === undefined) return null
+  const n = parseInt(value, 10)
+  if (!Number.isFinite(n)) return null
+  return Math.max(0, Math.min(100, n))
+}
+
 const createEditFormFromServer = (server) => ({
     id: server.id,
     name: server.name || '',
@@ -2072,6 +2086,7 @@ const createEditFormFromServer = (server) => ({
     expire_date: server.expire_date || '',
     traffic_limit: server.traffic_limit || '',
     traffic_calc_type: server.traffic_calc_type || 'total',
+    traffic_alert_percent: server.traffic_alert_percent ?? '',
     interface: server.interface || '',
     reset_day: server.reset_day ?? 1,
     collect_interval: server.collect_interval ?? 0,
@@ -2157,6 +2172,7 @@ const buildEditPayloadFromForm = (form) => {
       expire_date: normalizedExpireDate,
       traffic_limit: form.traffic_limit,
       traffic_calc_type: form.traffic_calc_type,
+      traffic_alert_percent: normalizeTrafficAlertPercentField(form.traffic_alert_percent),
       interface: form.interface,
       reset_day: form.reset_day,
       collect_interval: form.collect_interval,
@@ -2223,6 +2239,7 @@ const saveEdit = async () => {
     expire_date: normalizedExpireDate,
     traffic_limit: editForm.value.traffic_limit,
     traffic_calc_type: editForm.value.traffic_calc_type,
+    traffic_alert_percent: normalizeTrafficAlertPercentField(editForm.value.traffic_alert_percent),
     interface: editForm.value.interface,
     reset_day: editForm.value.reset_day,
     collect_interval: editForm.value.collect_interval,
@@ -2567,6 +2584,7 @@ const sendTestNotification = async () => {
       notification_webhook_body: settings.value.notification_webhook_body,
       notification_template: settings.value.notification_template,
       notification_timezone: normalizeNotificationTimezoneSetting(settings.value.notification_timezone),
+      notification_language: normalizeNotificationLanguageSetting(settings.value.notification_language),
       expire_notification_time: normalizeExpireNotificationTimeSetting(settings.value.expire_notification_time)
     })
     if (!result.error) {

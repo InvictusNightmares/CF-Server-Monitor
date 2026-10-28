@@ -152,7 +152,7 @@
 
     <div id="view-card" class="view-panel" :class="{ active: isCardView, 'high-density': filteredServers.length > 12 }">
       <div v-if="groupedServers.length === 0" class="empty-state">
-        [!] {{ trans.noServer }}，请在 <a href="/admin#admin" class="admin-link-color">{{ trans.backToAdmin }}</a> 中添加
+        [!] {{ trans.noServer }} <a href="/admin#/admin" class="admin-link-color">{{ trans.backToAdmin }}</a>{{ trans.noServerSuffix }}
       </div>
       <div v-else>
         <div v-for="group in groupedServers" :key="group.name" class="group-section">
@@ -382,9 +382,9 @@ import ServerRingCard from '../components/ServerRingCard.vue'
 import Footer from '../components/Footer.vue'
 import OsIcon from '../components/OsIcon.vue'
 import LiveConnectionTimeoutModal from '../components/LiveConnectionTimeoutModal.vue'
-import { fetchConfig, fetchServersAll, fetchServersAllWithProgress, formatBytes, createLiveSocket, getFlagRegionCode, getApiBases, isServerOnline, normalizeLiveSocketTimeoutMinutes } from '../utils/api.js'
+import { fetchConfig, fetchServersAll, fetchServersAllWithProgress, formatBytes, createLiveSocket, getFlagRegionCode, isServerOnline, normalizeLiveSocketTimeoutMinutes } from '../utils/api.js'
 import { calcTrafficUsagePercent, getCustomPingItems, getUsageColor } from '../composables/useServerCardData'
-import { getTitle, hasMultipleApiBases, getPublicAssetUrl } from '../utils/config'
+import { getTitle, hasMultipleApiBases, getApiBases, getPublicAssetUrl } from '../utils/config'
 import { currentLang, useTranslation } from '../utils/i18n.js'
 import { TIME, DEFAULT_SITE_TITLE, STORAGE, LATENCY_WINDOW, PING } from '../utils/constants'
 import { normalizeTimestamp as normalizeMetricTimestamp } from '../utils/time.js'
@@ -556,7 +556,7 @@ const filterOptionEntries = computed(() => Object.entries(filterOptions.value).m
   flagCode: code !== 'all' && code !== 'unknown' ? getFlagRegionCode(code) : ''
 })))
 
-const filterMoreLabel = computed(() => currentLang.value === 'zh' ? '更多' : 'MORE')
+const filterMoreLabel = computed(() => trans.value.filterMore)
 const visibleFilterOptions = computed(() => filterOptionEntries.value.slice(0, filterVisibleCount.value))
 const overflowFilterOptions = computed(() => filterOptionEntries.value.slice(filterVisibleCount.value))
 const isOverflowFilterActive = computed(() => overflowFilterOptions.value.some(item => item.code === currentFilter.value))

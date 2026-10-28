@@ -1,7 +1,7 @@
 <template>
   <div id="tab-settings" class="tab-content" :class="{ active: activeTab === 'settings' }">
     <div class="settings-grid">
-      <div class="settings-section" v-if="currentOrigin === selectedApiBase">
+      <div class="settings-section" v-if="canEditSiteSettings">
         <div class="section-title"><span>▸</span> {{ trans.appearance }} 1</div>
 
         <div class="form-row">
@@ -34,8 +34,7 @@
             <label class="form-label">{{ trans.defaultLanguage }}</label>
             <select v-model="settings.default_language" class="form-select">
               <option value="auto">{{ trans.languageAuto }}</option>
-              <option value="zh">{{ trans.languageChinese }}</option>
-              <option value="en">{{ trans.languageEnglish }}</option>
+              <option v-for="language in languages" :key="language.code" :value="language.code">{{ language.nativeLabel }}</option>
             </select>
           </div>
         </div>
@@ -108,7 +107,7 @@
         </div>
       </div>
 
-      <div class="settings-section" v-if="currentOrigin === selectedApiBase">
+      <div class="settings-section" v-if="canEditSiteSettings">
         <div class="section-title"><span>▸</span> {{ trans.appearance }} 2</div>
 
         <div class="form-row">
@@ -173,6 +172,14 @@
           <div class="form-group flex-1 checkbox-item">
             <input type="checkbox" id="cfg_show_three_net_details" v-model="settings.show_three_net_details">
             <label>{{ trans.showThreeNetDetails }}</label>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group flex-1 checkbox-item">
+            <input type="checkbox" id="cfg_auto_discovery" v-model="settings.auto_discovery">
+            <label><b>{{ trans.autoDiscovery }}</b></label>
+            <HelpTooltip :text="trans.autoDiscoveryTip" />
           </div>
         </div>
 
@@ -267,36 +274,6 @@
               <option value="builtin">{{ trans.builtinNotification || 'Built-in' }}</option>
               <option value="smtp">{{ trans.smtpNotification || 'SMTP Email' }}</option>
               <option value="webhook">{{ trans.customWebhook || 'Custom Webhook' }}</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="form-row">
-          <div class="form-group flex-1">
-            <label class="form-label">
-              {{ trans.notificationTimezone || 'Notification Timezone' }}
-              <HelpTooltip :text="trans.notificationTimezoneTip || 'Used only for notification output times and expiration reminder schedule.'" />
-            </label>
-            <select v-model="selectedNotificationTimezone" class="form-select">
-              <option v-for="timezone in commonNotificationTimezones" :key="timezone" :value="timezone">{{ timezone }}</option>
-              <option :value="CUSTOM_NOTIFICATION_TIMEZONE_VALUE">{{ trans.custom || 'Custom' }}</option>
-            </select>
-            <input
-              v-if="showCustomNotificationTimezone"
-              type="text"
-              v-model.trim="settings.notification_timezone"
-              class="form-input mt-2"
-              placeholder="Asia/Shanghai"
-            >
-          </div>
-
-          <div class="form-group flex-1">
-            <label class="form-label">
-              {{ trans.expireNotificationTime || 'Expiration Notification Time' }}
-              <HelpTooltip :text="trans.expireNotificationTimeTip || 'Check expiration and send reminders daily at this hour in the notification timezone. Use 0-23.'" />
-            </label>
-            <select v-model="settings.expire_notification_time" class="form-select">
-              <option v-for="hour in expireNotificationHourOptions" :key="hour" :value="hour">{{ hour }}</option>
             </select>
           </div>
         </div>
@@ -459,6 +436,54 @@
                 placeholder='{"title":"{{emoji}} {{event}}","content":"{{notification}}"}'
               ></textarea>
             </div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group flex-1">
+            <label class="form-label">
+              {{ trans.notificationTimezone || 'Notification Timezone' }}
+              <HelpTooltip :text="trans.notificationTimezoneTip || 'Used only for notification output times and expiration reminder schedule.'" />
+            </label>
+            <select v-model="selectedNotificationTimezone" class="form-select">
+              <option v-for="timezone in commonNotificationTimezones" :key="timezone" :value="timezone">{{ timezone }}</option>
+              <option :value="CUSTOM_NOTIFICATION_TIMEZONE_VALUE">{{ trans.custom || 'Custom' }}</option>
+            </select>
+            <input
+              v-if="showCustomNotificationTimezone"
+              type="text"
+              v-model.trim="settings.notification_timezone"
+              class="form-input mt-2"
+              placeholder="Asia/Shanghai"
+            >
+          </div>
+
+          <div class="form-group flex-1">
+            <label class="form-label">
+              {{ trans.notificationLanguage }}
+              <HelpTooltip :text="trans.notificationLanguageTip" />
+            </label>
+            <select v-model="settings.notification_language" class="form-select">
+              <option v-for="language in notificationLanguages" :key="language.code" :value="language.code">{{ language.nativeLabel }}</option>
+            </select>
+          </div>
+
+          <div class="form-group flex-1">
+            <label class="form-label">
+              {{ trans.expireNotificationTime || 'Expiration Notification Time' }}
+              <HelpTooltip :text="trans.expireNotificationTimeTip || 'Check expiration and send reminders daily at this hour in the notification timezone. Use 0-23.'" />
+            </label>
+            <select v-model="settings.expire_notification_time" class="form-select">
+              <option v-for="hour in expireNotificationHourOptions" :key="hour" :value="hour">{{ hour }}</option>
+            </select>
+          </div>
+
+          <div class="form-group flex-1">
+            <label class="form-label">
+              {{ trans.trafficAlertThreshold }} (%)
+              <HelpTooltip :text="trans.trafficAlertThresholdTip" />
+            </label>
+            <input type="number" v-model.number="settings.traffic_alert_threshold" class="form-input" min="0" max="100" step="1" placeholder="0">
           </div>
         </div>
 
@@ -727,68 +752,6 @@
           </div>
         </div>
 
-        <div class="form-group">
-          <div class="checkbox-item">
-            <input type="checkbox" id="cfg_github_oauth_enabled" v-model="settings.github_oauth_enabled">
-            <label><b>{{ trans.enableGithubOAuth }}</b></label>
-            <HelpTooltip :text="trans.githubOAuthTip" />
-          </div>
-        </div>
-
-        <template v-if="settings.github_oauth_enabled">
-
-          <div class="form-row">
-            <div class="form-group flex-1">
-              <label class="form-label">{{ trans.githubClientId }}</label>
-              <input type="text" name="github_client_id" autocomplete="off" v-model.trim="settings.github_client_id" class="form-input" :placeholder="trans.githubClientIdPlaceholder">
-            </div>
-
-            <div class="form-group flex-1">
-              <label class="form-label">{{ trans.githubClientSecret }}</label>
-              <div class="password-input-wrapper">
-                <input type="text" name="github_client_secret" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" v-model="settings.github_client_secret" :class="['form-input', { 'secret-input-masked': !passwordVisible.githubClientSecret }]" :placeholder="settings.github_client_secret_configured ? '••••••••' : ''">
-                <button type="button" class="password-toggle" @click="$emit('toggle-password', 'githubClientSecret')">
-                  {{ passwordVisible.githubClientSecret ? '🙈' : '👁️' }}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">{{ trans.githubBoundAccount }}</label>
-            <div class="inline-help-action">
-              <span class="text-sm">
-                {{ settings.github_user_id
-                  ? `ID: ${settings.github_user_id}`
-                  : trans.githubNotBound }}
-              </span>
-              <button type="button" class="btn btn-sm" :disabled="!canBindGithub || githubBindingLoading" @click="$emit('bind-github-account')">
-                {{ githubBindingLoading ? '⏳' : (settings.github_user_id ? trans.rebindGithubAccount : trans.bindGithubAccount) }}
-              </button>
-              <HelpTooltip :text="canBindGithub ? trans.githubBindingTip : trans.githubSaveBeforeBinding" />
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">
-              {{ trans.githubCallbackUrl }}
-              <HelpTooltip :text="trans.githubCallbackUrlTip" />
-            </label>
-            <div class="flex-center-gap-sm">
-              <input type="text" class="form-input flex-1 github-callback-input" :value="githubCallbackUrl" readonly>
-              <button
-                type="button"
-                class="btn btn-sm"
-                :aria-label="githubCallbackCopied ? trans.copied : trans.copy"
-                :title="githubCallbackCopied ? trans.copied : trans.copy"
-                @click="copyGithubCallbackUrl"
-              >
-                {{ githubCallbackCopied ? `✅ ${trans.copied}` : `📋 ${trans.copy}` }}
-              </button>
-            </div>
-          </div>
-        </template>
-
       </div>
 
       <div class="settings-section">
@@ -835,7 +798,8 @@
       </div>
     </div>
 
-    <div class="text-right mt-5">
+    <div class="settings-save-bar">
+      <span class="settings-save-hint">{{ trans.saveHint }}</span>
       <button @click="$emit('save-settings')" class="btn btn-primary btn-lg" :disabled="saving || hasPingNodeErrors">{{ saving ? '⏳' : '💾' }} {{ saving ? trans.saving : trans.saveConfig }}</button>
     </div>
   </div>
@@ -845,9 +809,16 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import HelpTooltip from '../../../components/HelpTooltip.vue'
 import { FRONTEND_WS_TIMEOUT_MINUTES_MAX, HISTORY } from '../../../utils/constants.js'
-import { copyTextToClipboard } from '../../../utils/clipboard.js'
-import { currentLang } from '../../../utils/i18n.js'
 import { PING_NODE_FIELDS, validatePingNode } from '../../../utils/pingNode.js'
+import { LANGUAGES, LANGUAGE_MAP } from '../../../locales'
+import { NOTIFICATION_LANGUAGE_CODES } from '../../../../shared/languages.js'
+
+const languages = LANGUAGES
+
+// 通知语言只支持后端已有文案的语种；选项固定显示各语言原生名称，不随界面语言翻译。
+const notificationLanguages = NOTIFICATION_LANGUAGE_CODES
+  .map((code) => LANGUAGE_MAP[code])
+  .filter(Boolean)
 
 const props = defineProps({
   trans: { type: Object, required: true },
@@ -860,46 +831,38 @@ const props = defineProps({
   saving: { type: Boolean, default: false },
   changeAdminPassword: { type: Boolean, default: false },
   testNotificationLoading: { type: Boolean, default: false },
-  d1UsageLoading: { type: Boolean, default: false },
-  githubBindingLoading: { type: Boolean, default: false }
+  d1UsageLoading: { type: Boolean, default: false }
 })
-
-const githubCallbackUrl = computed(() => {
-  try {
-    return new URL('/auth/github/callback', props.selectedApiBase || props.currentOrigin).toString()
-  } catch (_) {
-    return '/auth/github/callback'
-  }
-})
-
-const githubCallbackCopied = ref(false)
-let githubCallbackCopiedTimer
-
-const copyGithubCallbackUrl = async () => {
-  const copied = await copyTextToClipboard(githubCallbackUrl.value)
-  if (!copied) {
-    emit('alert-message', props.trans.httpsRequired)
-    return
-  }
-
-  githubCallbackCopied.value = true
-  clearTimeout(githubCallbackCopiedTimer)
-  githubCallbackCopiedTimer = setTimeout(() => {
-    githubCallbackCopied.value = false
-  }, 1500)
-}
-
-const canBindGithub = computed(() => Boolean(
-  String(props.settings.github_client_id || '').trim() &&
-  props.settings.github_client_secret_configured
-))
 
 const emit = defineEmits([
   'toggle-password', 'toggle-admin-password-change',
   'save-settings', 'upload-bg', 'upload-bg-mobile', 'upload-favicon',
-  'send-test-notification', 'query-d1-usage', 'bind-github-account',
+  'send-test-notification', 'query-d1-usage',
   'alert-message'
 ])
+
+const isLocalHostname = (value) => {
+  try {
+    const raw = String(value || '').trim()
+    if (!raw) return false
+    const hostname = new URL(raw.includes('://') ? raw : `http://${raw}`).hostname.toLowerCase()
+    return hostname === 'localhost' ||
+      hostname.endsWith('.localhost') ||
+      hostname === '127.0.0.1' ||
+      hostname === '0.0.0.0' ||
+      hostname === '::1' ||
+      hostname === '[::1]'
+  } catch (_) {
+    return false
+  }
+}
+
+// 站点级设置只允许在当前 API 对应的站点编辑；本地开发时也放行，便于连远端 API 调试。
+const canEditSiteSettings = computed(() =>
+  props.currentOrigin === props.selectedApiBase ||
+  isLocalHostname(props.currentOrigin) ||
+  isLocalHostname(props.selectedApiBase)
+)
 
 const commonNotificationTimezones = [
   'UTC',
@@ -1292,12 +1255,7 @@ const ensureResourceAlertRules = () => {
 const resourceAlertRules = computed(() => ensureResourceAlertRules())
 const resourceAlertExpanded = ref(false)
 const resourceAlertRuleNameInputs = new Map()
-const resourceAlertToggleText = computed(() => {
-  const isZh = currentLang.value === 'zh'
-  return resourceAlertExpanded.value
-    ? (isZh ? '收起' : 'Collapse')
-    : (isZh ? '展开' : 'Expand')
-})
+const resourceAlertToggleText = computed(() => resourceAlertExpanded.value ? props.trans.collapse : props.trans.expand)
 
 const toggleResourceAlertExpanded = () => {
   resourceAlertExpanded.value = !resourceAlertExpanded.value
@@ -1485,7 +1443,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('click', closeResourceAlertServerDropdowns)
-  clearTimeout(githubCallbackCopiedTimer)
 })
 
 defineExpose({ validateCspField, cspErrors, validatePingNodes, pingNodeErrors, validateSmtpFields, smtpErrors })

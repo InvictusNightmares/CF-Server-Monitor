@@ -1,12 +1,13 @@
 import { saveMetricsHistory } from '../database/schema.js';
-import { getServerDetail, clearServerDetailCache } from '../utils/cache.js';
+import { getServerDetail, clearServerDetailCache, patchServerDetailCache } from '../utils/cache.js';
+import { evaluateTrafficAlert } from '../services/notification.js';
 import {
   DISK_IO_FIELD_TO_COLUMN,
   DISK_IO_METRIC_FIELDS,
   mergeMetricsIntoServer,
   coerceNumericMetricFields
 } from '../utils/metrics.js';
-import { createErrorResponse, createUnauthorizedResponse, createNotFoundResponse, createBadRequestResponse } from '../utils/errors.js';
+import { createErrorResponse, createUnauthorizedResponse, createBadRequestResponse } from '../utils/errors.js';
 import { ensureServerOptimization } from '../database/indexOptimization.js';
 import { getResourceAlertConfig, getWssReportScheduleState, isWssReportConfigured, loadSiteSettings, normalizeBooleanSetting } from '../utils/settings.js';
 import { cacheLatestReportUpdate } from '../utils/latestReportCache.js';
@@ -29,8 +30,16 @@ import {
   HISTORY_METRIC_AGGREGATION_POLICY
 } from '../utils/historyFields.js';
 import {
+  AUTO_DISCOVERY_MODE_REUSED,
+  AUTO_DISCOVERY_STATUS_HEADER,
+  AUTO_DISCOVERY_SERVER_ID_HEADER,
+  discoverServer,
+  isAutoDiscoveryEnabled
+} from '../utils/autoDiscovery.js';
+import {
   UPDATE_FRONTEND_SUBSCRIBER_CHECK_INTERVAL_MS,
   UPDATE_MAX_BATCH_SAMPLES,
+  UPDATE_MAX_REQUEST_BYTES,
   UPDATE_REALTIME_BATCH_WINDOW_MS,
   UPDATE_RESOURCE_ALERT_BATCH_WINDOW_MS
 } from '../utils/config.js';
@@ -81,6 +90,49 @@ function logUpdateBadRequest(reason, details = {}) {
   console.warn('[Update] 400 Bad Request:', reason, details);
 }
 
+function getDeclaredContentLength(request) {
+  const raw = request.headers.get('Content-Length');
+  if (!raw) return null;
+  const length = Number(raw);
+  return Number.isFinite(length) && length >= 0 ? length : null;
+}
+
+function createPayloadTooLargeResponse() {
+  return new Response(JSON.stringify({
+    error: 'Payload too large',
+    code: 413,
+    text: 'payload_too_large'
+  }), {
+    status: 413,
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+      'X-CFSM-Agent-Status': 'payload_too_large',
+      // 与 Agent 的 wssProtocolRetryDelay（120s）保持一致；当前 Agent 尚未读取该头，仅作后续兼容。
+      'Retry-After': '120'
+    }
+  });
+}
+
+// 保持 404 兼容旧版 Agent：Agent 的 isAuthConfigHTTPStatus 只认 401/403/404，
+// 改 410 会让 WSS 失去 120s 协议退避。
+function createServerNotFoundResponse() {
+  return new Response(JSON.stringify({
+    error: 'Server not found',
+    code: 404,
+    text: 'server_not_found'
+  }), {
+    status: 404,
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+      'X-CFSM-Agent-Status': 'server_not_found',
+      // 服务器已删除：让 Agent 退避更久（300s），减少僵尸 Agent 的无效请求。
+      'Retry-After': '300'
+    }
+  });
+}
+
 export function normalizeCorrectionValue(value) {
   if (value === null || value === undefined || value === '') return 0;
   return isValidTrafficCorrection(value) ? Number(value) : null;
@@ -92,7 +144,17 @@ export function normalizeMetricSamples(data) {
     ? data.samples
     : (Array.isArray(data.batch) ? data.batch : []);
 
-  const samples = rawSamples.map(item => {
+  // Agent 按时间顺序追加样本；确认递增时才预截断，避免超大数组在服务端做全量 map/sort。
+  // 乱序输入不预截断，交给末尾的 sort + slice 兜底，避免丢掉最新样本。
+  const sampleTs = item => Number(item?.ts ?? item?.timestamp ?? item?.metrics?.timestamp);
+  const firstTs = sampleTs(rawSamples[0]);
+  const lastTs = sampleTs(rawSamples[rawSamples.length - 1]);
+  const chronological = Number.isFinite(firstTs) && Number.isFinite(lastTs) && firstTs <= lastTs;
+  const boundedSamples = chronological && rawSamples.length > UPDATE_MAX_BATCH_SAMPLES
+    ? rawSamples.slice(-UPDATE_MAX_BATCH_SAMPLES)
+    : rawSamples;
+
+  const samples = boundedSamples.map(item => {
     if (!item || typeof item !== 'object') return null;
     const metrics = item.metrics || item.data || item.payload || item;
     if (!metrics || typeof metrics !== 'object') return null;
@@ -503,10 +565,45 @@ function _ensureBatchFlush(env) {
   return flushingPromise;
 }
 
+// 自动建号的结果通过响应头回传，因此需要包一层统一补头，
+// 避免在 handleUpdateCore 的多个 return 分支里重复处理。
 export async function handleUpdate(request, env, ctx) {
+  const discovery = { mode: '', code: '', id: '' };
+  const response = await handleUpdateCore(request, env, ctx, discovery);
+
+  if (!discovery.mode) return response;
+
+  const headers = new Headers(response.headers);
+  headers.set(
+    AUTO_DISCOVERY_STATUS_HEADER,
+    discovery.code ? `${discovery.mode}:${discovery.code}` : discovery.mode
+  );
+  if (discovery.id) {
+    headers.set(AUTO_DISCOVERY_SERVER_ID_HEADER, discovery.id);
+  }
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
+
+async function handleUpdateCore(request, env, ctx, discovery) {
   try {
+    // 必须在 request.json() 之前：超大 body 的解析本身就可能耗尽 Worker CPU。
+    // 注意这是防呆而非硬上限：chunked 或缺少 Content-Length 的请求会跳过该检查。
+    const declaredLength = getDeclaredContentLength(request);
+    if (declaredLength !== null && declaredLength > UPDATE_MAX_REQUEST_BYTES) {
+      console.warn('[Update] 413 Payload too large:', {
+        content_length: declaredLength,
+        limit: UPDATE_MAX_REQUEST_BYTES
+      });
+      return createPayloadTooLargeResponse();
+    }
+
     const data = await request.json();
-    const { id, secret } = data;
+    const { id: requestedId, secret } = data;
 
     if (secret !== env.API_SECRET) {
       return createUnauthorizedResponse('Invalid secret');
@@ -515,11 +612,72 @@ export async function handleUpdate(request, env, ctx) {
     let regionCode = request.cf?.country || request.headers?.get('cf-ipcountry') || '';
     const agentVersion = normalizeAgentVersion(request.headers.get('X-Agent-Version'));
 
-    const serverDetail = await getServerDetail(env.DB, id, true);
+    const normalizedRequestId = typeof requestedId === 'string' ? requestedId.trim() : '';
+    let serverDetail = normalizedRequestId
+      ? await getServerDetail(env.DB, normalizedRequestId, true)
+      : null;
+
+    // 仅在 id 为空时尝试自动建号：已有 id 但查不到仍走 404，避免删除后被自动复活。
+    if (!serverDetail && !normalizedRequestId) {
+      // 建号前先做与服务器无关的载荷校验：否则会先 INSERT 出一行空壳，
+      // 随后返回 400，库里留下一条永远不会被写入数据的服务器。
+      if (normalizeMetricSamples(data).length === 0) {
+        logUpdateBadRequest('Missing metrics', {
+          id: '',
+          has_metrics: !!data.metrics,
+          has_samples: Array.isArray(data.samples),
+          has_batch: Array.isArray(data.batch)
+        });
+        return createBadRequestResponse('Missing metrics');
+      }
+      if (
+        (Object.prototype.hasOwnProperty.call(data, 'rx_correction') ||
+          Object.prototype.hasOwnProperty.call(data, 'tx_correction')) &&
+        (normalizeCorrectionValue(data.rx_correction) === null ||
+          normalizeCorrectionValue(data.tx_correction) === null)
+      ) {
+        return createBadRequestResponse('Invalid correction');
+      }
+      const settings = await loadSiteSettings(env.DB);
+      if (isAutoDiscoveryEnabled(settings)) {
+        const result = await discoverServer(env, {
+          name: data.name,
+          metrics: data.metrics,
+          request
+        });
+
+        discovery.mode = result.mode;
+        discovery.code = result.code;
+
+        // 同名服务器已存在时拒绝本次写入：不建号、不落库、不回传已有 id。
+        // 无 name 时名称取 CF-Connecting-IP，NAT/同出口下极易撞名，复用会把两台机器的数据混在一起。
+        if (result.mode === AUTO_DISCOVERY_MODE_REUSED) {
+          return createServerNotFoundResponse();
+        }
+
+        if (result.id) {
+          // 建号已经成功，id 必须先记下来：即使随后读详情失败，也要通过响应头回传，
+          // 否则 Agent 下次上报仍是空 id，只会撞到同名服务器（reused）然后退出。
+          discovery.id = result.id;
+          clearServerDetailCache();
+          try {
+            serverDetail = await getServerDetail(env.DB, result.id, true);
+          } catch (e) {
+            console.warn('[AutoDiscovery] reload failed after create', {
+              id: result.id,
+              error: e?.message || e
+            });
+            serverDetail = null;
+          }
+        }
+      }
+    }
 
     if (!serverDetail) {
-      return createNotFoundResponse('Server not found');
+      return createServerNotFoundResponse();
     }
+
+    const id = serverDetail.id;
 
     if (
       Object.prototype.hasOwnProperty.call(data, 'rx_correction') ||
@@ -589,6 +747,10 @@ export async function handleUpdate(request, env, ctx) {
     // 加入批量队列，由后台定时任务统一推送到 DO
     queueBroadcastSamples(id, broadcastSamples);
     ctx.waitUntil(_ensureBatchFlush(env));
+    // 月流量阈值告警：复用已加载的 serverDetail 与刚入库的 historyMetrics，非阻塞后台执行
+    ctx.waitUntil(evaluateTrafficAlert(env, serverDetail, historyMetrics, {
+      patchCache: (serverId, value) => patchServerDetailCache(serverId, { traffic_alert_state: value })
+    }));
 
     const clientConfigSchema = normalizeAgentConfigSchemaVersion(request.headers.get(AGENT_CONFIG_SCHEMA_HEADER));
     if (!clientConfigSchema) {

@@ -10,12 +10,12 @@ A lightweight multi-server monitoring dashboard built on Cloudflare Workers, D1,
   <a href="README-en.md">English</a>
 </p>
 
-[![Workers](https://img.shields.io/badge/Workers-2.8.6%20Beta6-f38020?style=flat-square&logo=cloudflare&logoColor=white)](version.json)
+[![Workers](https://img.shields.io/badge/Workers-2.8.7%20Beta4-f38020?style=flat-square&logo=cloudflare&logoColor=white)](version.json)
 [![GitHub Stars](https://img.shields.io/github/stars/huilang-me/CF-Server-Monitor?style=flat-square&logo=github)](https://github.com/huilang-me/CF-Server-Monitor/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/huilang-me/CF-Server-Monitor?style=flat-square&logo=github)](https://github.com/huilang-me/CF-Server-Monitor/forks)
 [![License](https://img.shields.io/badge/License-MIT-16a34a?style=flat-square)](#license)
 
-[Live Demo](https://demo.huilang.me/) · [API Reference](API.md) · [Go Agent Guide](https://github.com/huilang-me/cfsm-agent) · [Theme Development](theme-develop.md)
+[Live Demo](https://demo.huilang.me/) · [API Reference](API.md) · [Go Agent Guide](https://github.com/huilang-me/cfsm-agent) · [Theme Development](theme-develop.md) · [Theme AI Prompt](theme-ai-prompt.md)
 
 </div>
 
@@ -23,7 +23,7 @@ A lightweight multi-server monitoring dashboard built on Cloudflare Workers, D1,
 
 CF-Server-Monitor is a server monitoring system designed for Cloudflare Workers. Each server runs an Agent that reports metrics to a Worker. The Worker stores data in D1 and pushes realtime updates through Durable Objects and WebSocket, providing free-hosted, low-maintenance realtime monitoring.
 
-It supports mainstream Linux distributions, Alpine Linux, OpenWrt, macOS, Synology DSM, Feiniu fnOS, Windows, and similar systems.
+It supports mainstream Linux distributions, Alpine Linux, OpenWrt, macOS, Synology DSM, Feiniu fnOS, Windows, and similar systems, and provides Docker image deployment.
 
 Security is stricter by design: the Agent only reports metrics one way, does not provide WebSSH, remote command delivery, or a controller channel, and can run as a non-root user to reduce blast radius.
 
@@ -66,11 +66,11 @@ Compared with traditional controller-style monitoring tools, CF-Server-Monitor i
 | History | 7-day charts, long-range sampling, realtime network speed, monthly traffic and correction |
 | Network quality | Latency and packet loss tracking for CT, CU, CM, and BGP nodes; when three-net details are enabled, the dashboard samples up to 20 real points from the last 2 hours of D1 history and caches them for 5 minutes |
 | Dashboard views | Bar chart, ring chart, table, and map views for desktop and mobile |
-| Admin panel | Server CRUD, drag sorting, hidden servers, import/export, batch delete, database maintenance |
-| Cross-platform Agent | Mainstream Linux, Alpine Linux, OpenWrt, Synology DSM, Feiniu fnOS, FreeBSD, macOS, Windows; Go Agent by default, Shell/PowerShell still available |
+| Admin panel | Server CRUD, drag sorting, hidden servers, import/export, batch delete, server-list cache refresh, database maintenance |
+| Cross-platform Agent | Mainstream Linux, Alpine Linux, OpenWrt, Synology DSM, Feiniu fnOS, FreeBSD, macOS, Windows, plus Docker image deployment; Go Agent by default, Shell/PowerShell still available |
 | Realtime push | Durable Objects + WebSocket refresh the UI immediately after Agent reports |
 | Alerts | Offline alerts, recovery notices, expiration reminders, resource load rules |
-| Multi-language | Built-in Chinese and English frontend switch; Chinese and English documentation |
+| Multi-language | Built-in Chinese, English, and Latin American Spanish frontend switch; notifications in Chinese, English, or Spanish; Chinese and English documentation |
 | Multi-site | GitHub Pages static frontend and aggregation of multiple Worker APIs |
 | Widget | iOS Scriptable widget script for quick mobile status checks |
 | Security | API Secret, admin password, JWT, Turnstile, CORS, CSP allowlists |
@@ -99,7 +99,8 @@ Core flow:
 
 Recent changes:
 
-- `2.8.6`: Added GitHub login support, WSS frontend subscription 250ms batch report, Add an SMTP notification channel.
+- `2.8.7`: Optimized scheduled task logic to reduce CPU usage and avoid exceeding free-tier limits. `/update` now enforces a 512KB body limit and returns 413 beyond it; Agent WSS connections for deleted servers are closed within 2 minutes; WSS reports now validate frame size and authenticated sessions survive transient D1 errors; batched samples keep only the latest 300. Added a server-side auto-discovery mechanism to automatically bind the server ID.
+- `2.8.6`: WSS frontend subscription with 250ms batch reporting, added SMTP notification channel, added monthly traffic threshold alert, removed legacy database compatibility, added Docker installation method.
 - `2.8.5`: Added custom Ping node names, ICMP mode, optimized WSS response logic, API interface optimization, and optimized frontend. Also added 4 default Ping nodes.
 - `2.8.4`: Added Agent WSS reporting and active hours. Agents use POST outside selected hours to reduce Do duration, and this requires Agent `v1.0.10+`. Also added account Do usage display with optimized Do broadcast requests when no frontend subscription exists to reduce idle quota consumption, added custom Webhook channel in notification settings, and added frontend WSS timeout configuration.
 - `2.8.3`: Added disk IO metrics, switched the default Agent to Go, and added realtime latency / packet-loss windows.
@@ -193,7 +194,27 @@ Change the admin username and password after login. The admin password can be se
 4. Click the copy button, choose the target system and Agent version.
 5. Run the generated command on the target server.
 
-Prefer the command generated by the admin panel because it includes the server ID, Worker URL, Secret, reporting interval, network quality nodes, and network interface settings.
+For larger fleets you can enable **Auto Discovery** under Settings → Site Settings: install the Agent without `-id` and the server is created automatically on the first report. The name comes from `-name`, or the client IP (`CF-Connecting-IP`) when omitted. An existing server with the same name is never reused: the server rejects that report with 404 and the agent logs a hint and exits instead. New servers may take up to 2 minutes to appear on the dashboard; creation failures, or a server that does not have Auto Discovery enabled, also log a single hint and exit without retrying, notifying, or leaving any marker file behind. The switch is off by default.
+
+After Auto Discovery is saved, a copy button appears next to the switch in Settings → Site Settings and copies this `-id`-free Linux install command.
+
+Install command without `-id` (Linux, OpenWrt, Synology DSM, FreeBSD, macOS):
+
+```bash
+# name defaults to the machine's public IP
+curl -fsSL https://raw.githubusercontent.com/huilang-me/cfsm-agent/main/install.sh | sh -s -- install -secret=SECRET -url=WORKER_URL
+
+# explicit name
+curl -fsSL https://raw.githubusercontent.com/huilang-me/cfsm-agent/main/install.sh | sh -s -- install -secret=SECRET -url=WORKER_URL -name=hk-1
+```
+
+On Windows (administrator PowerShell), also without `-id`:
+
+```powershell
+$script = "$env:TEMP\install-cf-probe.ps1"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/huilang-me/cfsm-agent/main/install.ps1" -OutFile $script -UseBasicParsing
+PowerShell -ExecutionPolicy Bypass -File $script install -secret=SECRET -url=WORKER_URL -name=hk-1
+```
 
 ## Agent Parameters and Security
 
@@ -205,7 +226,8 @@ See [cfsm-agent](https://github.com/huilang-me/cfsm-agent) for full install path
 
 | Parameter | Description | Default |
 | --- | --- | --- |
-| `-id` | Unique server ID | Required |
+| `-id` | Unique server ID | Required (optional when Auto Discovery is on) |
+| `-name` | Server name used when Auto Discovery creates the server | Client IP (`CF-Connecting-IP`) |
 | `-secret` | Agent reporting secret; must match `API_SECRET` | Required |
 | `-url` | Worker reporting URL | Required |
 | `-collect_interval` | Local collection interval; `0` disables extra sampling | `0` |
@@ -228,6 +250,23 @@ loginctl enable-linger username
 ```
 
 When uninstalling, select the user that originally installed the Agent. For OpenWrt, Alpine/OpenRC, Synology DSM, and other systems without `systemd --user`, use the matching system command.
+
+### Docker Deployment
+
+The admin copy-install dialog lets you choose Docker as the target system, generating a container command like the one below (server ID, secret, and Worker URL are filled in automatically for the current server; the image tag defaults to `latest` and can be customized in the Agent version field):
+
+```bash
+docker run -d --name cf-probe --restart=unless-stopped --network=host \
+  -v cf-probe-data:/data \
+  -e SERVER_ID=<server-id> -e SECRET='<API_SECRET>' -e WORKER_URL=https://<your-worker>/update \
+  ghcr.io/huilang-me/cfsm-agent:latest
+```
+
+Collect interval, report interval, ping nodes, network interface, traffic reset day, and upload/download correction are pulled dynamically by the Agent from the admin panel via `SERVER_ID`, so they do not need to be repeated in the command; changing the image tag upgrades or rolls back to that version. To remove the container:
+
+```bash
+docker rm -f cf-probe && docker volume rm cf-probe-data
+```
 
 ## Configuration
 
@@ -261,7 +300,7 @@ npm run build:github-page
 
 | Category | Main options |
 | --- | --- |
-| Site | Title, background, favicon, default display mode, default appearance, default language, three-net details, public access |
+| Site | Title, background, favicon, default display mode, default appearance, default language, three-net details, public access, auto discovery (with a copy button for the `-id`-free Linux install command) |
 | Server | HTTP/WSS report intervals, collect interval, ping nodes, network interfaces, monthly traffic, price, expiration, auto-renew |
 | Security | Admin account, password, JWT Secret, Turnstile |
 | Notifications | Offline alerts, expiration reminders, resource alerts, test notification |
@@ -286,6 +325,8 @@ The widget shows online status, CPU, memory, disk, monthly traffic, realtime upl
 ## Notifications and Alerts
 
 Configure notifications in Admin -> Global Settings -> Notifications. Notification delivery has three channel modes: built-in channels, SMTP email, and custom Webhook. When custom Webhook is selected, the backend sends only the Webhook request and does not call the built-in channel.
+
+**Notification Language** sets whether alert messages (event names and message text) are sent in Chinese, English, or Spanish. The default is Chinese. Fixed text inside custom templates and Webhook bodies is not translated.
 
 ### Built-in Channels
 
@@ -390,15 +431,6 @@ Cloudflare Turnstile can be enabled from the admin panel to reduce abuse of publ
 
 Same-origin access is recommended by default. If you use an external static frontend or multi-site aggregation, add trusted origins to `CORS_ALLOWED_ORIGINS`.
 
-### GitHub Login
-
-1. Create an [OAuth App](https://github.com/settings/developers) under GitHub `Settings → Developer settings → OAuth Apps`.
-2. Enter its Client ID and Client Secret under Admin Login Settings, then save the configuration.
-3. Copy the exact `Authorization callback URL` shown by CFSM into the GitHub OAuth App.
-4. While signed in with the admin password, click Bind GitHub Account and authorize it. CFSM stores the account's immutable numeric GitHub ID, and only that account can use GitHub login afterward.
-
-The GitHub OAuth configuration and binding are stored in the existing D1 `site_options` JSON and do not require a schema upgrade. The Client Secret is not returned by the settings read API; leave it blank on later saves to preserve the stored value. Rebinding requires an authenticated admin session. Keep password login enabled as a recovery path.
-
 ### CSP
 
 The project enables a conservative Content Security Policy by default. Third-party backgrounds, external CSS/JS, fonts, images, and WebSocket/API origins must be added to the CSP allowlists in the admin panel before they can load.
@@ -417,7 +449,10 @@ The project includes a built-in theme and supports:
 - Third-party GitHub tree theme URLs
 - Admin-only theme preview
 
-Third-party themes only proxy `index.html` and `assets/` from the theme repository. The admin panel always uses the built-in theme. See [theme-develop.md](theme-develop.md) for custom theme development.
+Third-party themes only proxy `index.html` and `assets/` from the theme repository. The admin panel always uses the built-in theme. For custom theme development, see:
+
+- [theme-ai-prompt.md](theme-ai-prompt.md): Theme development AI prompt — paste the whole block into an AI coding assistant; includes the core data flow, D1 consumption rules and a pre-delivery checklist (Chinese)
+- [theme-develop.md](theme-develop.md): Full API field reference and auth details
 
 ## Upgrade and Maintenance
 
@@ -580,6 +615,7 @@ CF-Server-Monitor/
 ├── test/                    # Local tests and mock data tools
 ├── API.md                   # REST / WebSocket API reference
 ├── theme-develop.md         # Third-party theme development
+├── theme-ai-prompt.md       # Theme development AI prompt (paste into AI)
 ├── wrangler.toml            # Local Wrangler configuration
 └── version.json             # Worker / Agent versions
 ```
@@ -616,6 +652,11 @@ If the image URL redirects or goes through a CDN redirect, open the browser deve
 
 Open the Cloudflare D1 database `server-monitor-db`, edit the `setting` table, and update the `password` field in `site_options`. The legacy MD5-compatible value `e10adc3949ba59abbe56e057f20f883e` maps to password `123456`. Log in with it and set a strong password in the admin panel.
 
+
+### Domains not hosted on Cloudflare cannot be bound
+
+You can implement reverse proxying by deploying the [CFSM-PROXY](https://github.com/huilang-me/CFSM-PROXY) Pages project, allowing you to bind domains that are not hosted on Cloudflare.
+
 ### Servers in mainland China cannot report
 
 Binding a custom probe domain to the Worker is recommended. If needed, you can temporarily map the probe domain to a reachable Cloudflare CDN IP in hosts:
@@ -623,6 +664,8 @@ Binding a custom probe domain to the Worker is recommended. If needed, you can t
 ```bash
 echo <CF_CDN_IP> <your-probe-domain> | sudo tee -a /etc/hosts
 ```
+
+If you are using [CFSM-PROXY](https://github.com/huilang-me/CFSM-PROXY), please manually change the `url` parameter in the installation command to the bound domain.
 
 ### Ping values are abnormal or always 1
 
@@ -663,6 +706,7 @@ The frontend may display Hong Kong, Macao, Taiwan, and country/region informatio
 - [API.md](API.md): REST API, WebSocket, auth, error codes, and data structures
 - [https://github.com/huilang-me/cfsm-agent](cfsm-agent): Go Agent configuration, upgrade, logs, and troubleshooting
 - [theme-develop.md](theme-develop.md): Third-party theme development
+- [theme-ai-prompt.md](theme-ai-prompt.md): Theme development AI prompt — paste it into an AI assistant to build themes that follow project rules
 - [test/README.md](test/README.md): Local mock data and testing workflow
 
 ## Community
@@ -679,6 +723,11 @@ If this project is helpful to you, you can support future maintenance through th
 </p>
 
 - WeChat appreciation: scan the QR code
+
+### Partners & Recommendations
+
+If you need airport transfers, business transportation, or private chauffeur services in the Greater Bay Area, you can consider [Hong Kong Chauffeur](https://hkchauffeur.com/), serving Hong Kong, Shenzhen, Guangzhou, Zhuhai, Macau, and other major cities in the region.
+
 
 ## Credits
 

@@ -65,6 +65,9 @@
               <option v-for="day in 31" :key="day" :value="day">{{ day }}</option>
             </select>
           </BatchEditField>
+          <BatchEditField :enabled="enabled.traffic_alert_percent" :label="`${trans.trafficAlertPercent} (%)`" @toggle="toggleField('traffic_alert_percent', $event)">
+            <input type="number" v-model="form.traffic_alert_percent" class="form-input" :disabled="!enabled.traffic_alert_percent" min="0" max="100" step="1">
+          </BatchEditField>
           <BatchEditField :enabled="enabled.rx_correction" :label="`${trans.rxCorrection} (GB)`" @toggle="toggleField('rx_correction', $event)">
             <input type="number" v-model="form.rx_correction" class="form-input" :disabled="!enabled.rx_correction" min="0" step="0.1">
           </BatchEditField>
@@ -110,7 +113,7 @@
             </select>
           </BatchEditField>
           <BatchEditField :enabled="enabled.interface" :label="trans.networkInterface" @toggle="toggleField('interface', $event)">
-            <input type="text" v-model.trim="form.interface" class="form-input" :disabled="!enabled.interface" :placeholder="trans.networkInterfacePlaceholder">
+            <input type="text" v-model.trim="form.interface" class="form-input" :disabled="!enabled.interface" placeholder="eth0">
           </BatchEditField>
         </div>
 
@@ -168,7 +171,7 @@
 import { computed } from 'vue'
 import BatchEditField from './BatchEditField.vue'
 import { currentLang } from '../../../utils/i18n.js'
-import { BILLING_CYCLES, CURRENCY_OPTIONS } from '../../../utils/server.js'
+import { BILLING_CYCLES, CURRENCY_OPTIONS, getLocalizedOptionField } from '../../../utils/server.js'
 
 const form = defineModel('form', { type: Object, required: true })
 const enabled = defineModel('enabled', { type: Object, required: true })
@@ -197,10 +200,8 @@ const currencySelectOptions = computed(() => {
   ]
 })
 
-const cycleLabel = (item) => currentLang.value === 'zh' ? item.labelZh : item.labelEn
-const currencyLabel = (item) => currentLang.value === 'zh'
-  ? `${item.symbol} ${item.nameZh}`
-  : `${item.symbol} ${item.nameEn}`
+const cycleLabel = (item) => getLocalizedOptionField(item, 'label', currentLang.value)
+const currencyLabel = (item) => `${item.symbol} ${getLocalizedOptionField(item, 'name', currentLang.value)}`
 
 const hasEnabledFields = computed(() => Object.values(enabled.value).some(Boolean))
 
